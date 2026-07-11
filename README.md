@@ -1,9 +1,15 @@
 # RIN08-Live
 
 RIN08-Live ist eine Android-Anwendung zur Echtzeit-Erfassung und Bewertung einer Reise nach den Vorgaben der **RIN 2008** (FGSV Richtlinien für integrierte Netzgestaltung).
-Die App berechnet fortlaufend die Reiseweite, Luftlinienweite, die Luftliniengeschwindigkeit und klassifiziert die erfassten Datenpunkte fortlaufend in SAQ-Stufen (A bis F).
+Die App berechnet fortlaufend die Reiseweite, die Luftlinienweite und die Luftliniengeschwindigkeit. Sie klassifiziert die erfassten Datenpunkte fortlaufend in SAQ-Stufen (A bis F).
 
 ## Features
+
+![alt text]()https://raw.githubusercontent.com/legeiger/RIN08-live/refs/heads/main/docs/Screen001_dashboard.png) 
+
+![alt text]()https://raw.githubusercontent.com/legeiger/RIN08-live/refs/heads/main/docs/Screen002_settings.png) 
+
+
 * **Echtzeit-Tracking:** GPS-Tracking im 2-Sekunden-Intervall.
 * **Live-Bewertung:** Fortlaufende Berechnung von Gesamtdistanz, Luftlinie, V-Aktuell (letzte 5 Datenpunkte) und V-Luftlinie.
 * **Datenvisualisierung:** Dynamisches Live-Plotting der gefahrenen Werte gegen die SAQ-Grenzwerte via Chart.js.
