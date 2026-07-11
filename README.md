@@ -18,7 +18,7 @@ Die App berechnet fortlaufend die Reiseweite, Luftlinienweite, die Luftlinienges
 Die App wird als APK-Datei bereitgestellt und muss manuell installiert werden (Sideloading).
 
 ### 1. APK Installieren (Sideload)
-1. Lade die aktuelle `RIN08-Live.apk` aus dem Bereich **[Releases](#)** herunter.
+1. Lade die aktuelle `RIN08-Live.apk` aus dem Bereich **[Releases](https://github.com/legeiger/RIN08-live/releases)** herunter.
 2. Öffne die Datei auf deinem Android-Gerät.
 3. Falls eine Sicherheitswarnung erscheint: Erlaube die Installation aus "Unbekannten Quellen" für deinen Browser oder Dateimanager.
 
@@ -30,7 +30,7 @@ Damit die GPS-Aufzeichnung nicht vom Android-System beendet wird, sobald der Bil
 
 ## Build Instructions
 
-Das Projekt basiert auf der WebView-Umgebung [iappyxOS]. Die Architektur besteht aus einer Single-File-Application.
+Das Projekt basiert auf der WebView-Umgebung [iappyxOS](https://github.com/iappyx/iappyxOS). Die Architektur besteht aus einer Single-File-Application.
 
 1. Erstelle ein neues Projekt in der iappyxOS-Umgebung.
 2. Füge den Quellcode der `index.html` aus diesem Repository als Hauptdatei ein.
