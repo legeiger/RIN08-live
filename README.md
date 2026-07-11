@@ -5,9 +5,9 @@ Die App berechnet fortlaufend die Reiseweite, die Luftlinienweite und die Luftli
 
 ## Features
 
-![alt text]()https://raw.githubusercontent.com/legeiger/RIN08-live/refs/heads/main/docs/Screen001_dashboard.png) 
+![alt text](https://raw.githubusercontent.com/legeiger/RIN08-live/refs/heads/main/docs/Screen001_dashboard.png) 
 
-![alt text]()https://raw.githubusercontent.com/legeiger/RIN08-live/refs/heads/main/docs/Screen002_settings.png) 
+![alt text](https://raw.githubusercontent.com/legeiger/RIN08-live/refs/heads/main/docs/Screen002_settings.png) 
 
 
 * **Echtzeit-Tracking:** GPS-Tracking im 2-Sekunden-Intervall.
