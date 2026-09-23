@@ -1,44 +1,93 @@
 # RIN08-Live
 
-RIN08-Live ist eine Android-Anwendung zur Echtzeit-Erfassung und Bewertung einer Reise nach den Vorgaben der **RIN 2008** (FGSV Richtlinien für integrierte Netzgestaltung).
-Die App berechnet fortlaufend die Reiseweite, die Luftlinienweite und die Luftliniengeschwindigkeit. Sie klassifiziert die erfassten Datenpunkte fortlaufend in SAQ-Stufen (A bis F).
+Android application for real-time journey tracking and SAQ (Stufe der Angebotsqualität) evaluation according to **RIN 2008** (FGSV guidelines for integrated network design).
 
-## Features
+Built with **Python 3.12** and **[Flet](https://flet.dev)** (Flutter runtime).
 
-![alt text](https://raw.githubusercontent.com/legeiger/RIN08-live/refs/heads/main/docs/Screen001_dashboard.png) 
+---
 
-![alt text](https://raw.githubusercontent.com/legeiger/RIN08-live/refs/heads/main/docs/Screen002_settings.png) 
+## Architecture Overview
 
+- **Core / UI:** Python 3.12 + Flet (`main.py`, `views/`).
+- **Domain & Persistence:** SQLite for time-series geospatial points and SAQ calculations (`models.py`).
+- **Packaging & Config:** PEP 621 compliant `pyproject.toml`.
+- **Target Platform:** Android APK (Foreground Service + Background Location).
 
-* **Echtzeit-Tracking:** GPS-Tracking im 2-Sekunden-Intervall.
-* **Live-Bewertung:** Fortlaufende Berechnung von Gesamtdistanz, Luftlinie, V-Aktuell (letzte 5 Datenpunkte) und V-Luftlinie.
-* **Datenvisualisierung:** Dynamisches Live-Plotting der gefahrenen Werte gegen die SAQ-Grenzwerte via Chart.js.
-* **Konfigurierbarkeit:** Anpassbare SAQ-Kurvenparameter (`a`, `b`, `c`) und Filter-Schwellenwerte für verschiedene Modi (PKW, ÖV, IÖ).
-* **Lokale Persistenz:** Speicherung der Messpunkte in einer nativen SQLite-Datenbank.
+---
 
-## Bekannte Probleme (Known Issues)
-* **Daten-Export defekt:** Aktuell schlagen alle Export-Routen (Teilen, Speichern, Zwischenablage) aufgrund von Restriktionen der nativen WebView-Bridge fehl. Die Messdaten werden sicher in der Datenbank erfasst, können momentan aber nicht aus der App exportiert werden.
+## Development Setup
 
-## Installation & Berechtigungen
+### Option 1: Docker Dev Environment (Recommended)
 
-Die App wird als APK-Datei bereitgestellt und muss manuell installiert werden (Sideloading).
+Requires only Docker & Docker Compose. Completely isolates dependencies from the host system with instant hot-reload.
 
-### 1. APK Installieren (Sideload)
-1. Lade die aktuelle `RIN08-Live.apk` aus dem Bereich **[Releases](https://github.com/legeiger/RIN08-live/releases)** herunter.
-2. Öffne die Datei auf deinem Android-Gerät.
-3. Falls eine Sicherheitswarnung erscheint: Erlaube die Installation aus "Unbekannten Quellen" für deinen Browser oder Dateimanager.
+```bash
+# Start local web preview with hot-reload on port 8550
+docker compose up
 
-### 2. Hintergrund-Standort aktivieren (Zwingend erforderlich!)
-Damit die GPS-Aufzeichnung nicht vom Android-System beendet wird, sobald der Bildschirm ausgeht, benötigt die App dauerhaften Zugriff auf den Standort:
-1. Öffne die Android **Einstellungen** ➔ **Apps** ➔ **RIN08-Live**.
-2. Tippe auf **Berechtigungen** ➔ **Standort**.
-3. Wähle die Option **"Immer zulassen"** (Allow all the time). 
+# Stop service
+docker compose down
+```
 
-## Build Instructions
+Open **[http://localhost:8550](http://localhost:8550)** in your browser. Any edits saved in the workspace trigger hot-reload inside the container.
 
-Das Projekt basiert auf der WebView-Umgebung [iappyxOS](https://github.com/iappyx/iappyxOS). Die Architektur besteht aus einer Single-File-Application.
+---
 
-1. Erstelle ein neues Projekt in der iappyxOS-Umgebung.
-2. Füge den Quellcode der `index.html` aus diesem Repository als Hauptdatei ein.
-3. Aktiviere die Berechtigungen `ACCESS_FINE_LOCATION` und `FOREGROUND_SERVICE`.
-4. Kompiliere die APK direkt über das Build-System.
+### Option 2: Local Python 3.12 Virtual Environment
+
+If running directly on the host machine:
+
+```bash
+# 1. Create and activate a Python 3.12 virtual environment
+# Windows:
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# Linux / macOS:
+python3.12 -m venv .venv
+source .venv/bin/activate
+
+# 2. Install package in editable mode with dev dependencies
+pip install --upgrade pip
+pip install -e ".[dev]"
+
+# 3. Start local development server (web preview)
+flet run --web --port 8550
+```
+
+---
+
+## Building the Android APK
+
+### 1. CI/CD: GitHub Actions (Recommended — Zero Local Toolchain)
+
+A dedicated GitHub Actions workflow ([`.github/workflows/build-apk.yml`](.github/workflows/build-apk.yml)) handles Flutter SDK, Android SDK, and Java dependencies in a disposable runner.
+
+1. Push your changes to the `flet` branch.
+2. In GitHub, navigate to **Actions** ➔ **Build Android APK**.
+3. Click **Run workflow**, select branch `flet`, and confirm.
+4. Download the compiled `RIN08-Live-release-apk` zip under **Artifacts** once the job finishes (~4–5 min).
+
+---
+
+### 2. Local APK Build (Requires Android & Flutter Toolchains)
+
+If building locally on a machine with Flutter SDK, Android SDK (API 34+), and JDK 17 installed:
+
+```bash
+flet build apk --project-name RIN08-Live
+```
+
+Output binary:
+```
+build/apk/app-release.apk
+```
+
+---
+
+## Android Permissions & Deployment
+
+1. **Sideload**: Transfer and install `app-release.apk` on device.
+2. **Background Location (Mandatory)**: 
+   Go to **Settings** ➔ **Apps** ➔ **RIN08-Live** ➔ **Permissions** ➔ **Location** ➔ Select **"Allow all the time"** (*Immer zulassen*).
+   *Required for continuous GPS logging via Foreground Service when screen is locked or app is minimized.*

@@ -1,0 +1,49 @@
+[project]
+name = "rin08-live"
+version = "0.8.1"
+description = "Real-time RIN 2008 journey tracking and SAQ evaluation."
+requires-python = ">=3.12"
+authors = [
+    { name = "Leander Geiger", email = "leander@lgeiger.de" }
+]
+dependencies = [
+    "flet>=1.0.1",
+    "flet-geolocator>=1.0.1",
+    "flet-charts>=1.0.1"
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project.optional-dependencies]
+dev = [
+    "flet-cli>=1.0.1",
+    "flet-desktop>=1.0.1",
+    "flet-web>=1.0.1"
+]
+
+[dependency-groups]
+dev = [
+    "flet-cli>=1.0.1",
+    "flet-desktop>=1.0.1",
+    "flet-web>=1.0.1"
+]
+
+[tool.flet.metadata]
+title = "RIN08 Live"
+
+[tool.flet]
+org = "dev.flet"
+company = "Leander Geiger"
+copyright = "Copyright (C) 2026 by Leander Geiger"
+
+[tool.flet.android]
+permissions = [
+    "android.permission.ACCESS_FINE_LOCATION",
+    "android.permission.ACCESS_COARSE_LOCATION",
+    "android.permission.ACCESS_BACKGROUND_LOCATION",
+    "android.permission.FOREGROUND_SERVICE",
+    "android.permission.FOREGROUND_SERVICE_LOCATION",
+    "android.permission.WAKE_LOCK"
+]

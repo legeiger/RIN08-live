@@ -1,0 +1,12 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: rin08-live-preview
+    ports:
+      - "8550:8550"
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
