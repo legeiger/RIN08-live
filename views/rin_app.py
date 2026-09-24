@@ -341,11 +341,17 @@ class RinApp:
 
         self._page.launch_url(data_uri)
 
-    def copy_csv(self, _event=None) -> None:
+    async def copy_csv(self, _event=None) -> None:
         points = self.store.points_for(self.tracker.session_id)
         csv_text = self._csv_for(points)
-        self._page.set_clipboard(csv_text)
-        self._log("CSV in Zwischenablage kopiert.")
+        try:
+            if not any(isinstance(s, ft.Clipboard) for s in self._page.services):
+                self._page.services.append(ft.Clipboard())
+            clipboard = next(s for s in self._page.services if isinstance(s, ft.Clipboard))
+            await clipboard.set(csv_text)
+            self._log("CSV in Zwischenablage kopiert.")
+        except Exception as err:
+            self._log(f"Kopieren: {err}")
 
     def save_settings(self, _event) -> None:
         self.store.save_settings(self.settings)
