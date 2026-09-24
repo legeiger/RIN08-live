@@ -52,7 +52,7 @@ class RinApp:
         self.store = SQLiteStore()
         self.settings = self.store.load_settings()
         self.tracker = TripTracker(self.settings)
-        self.recording = False
+        self.recording_state = "IDLE"  # "IDLE", "RECORDING", "PAUSED"
         self.active_tab = "dashboard"
         self.csv_visible = False
         self.last_position = None
@@ -92,6 +92,10 @@ class RinApp:
             except RuntimeError:
                 pass
 
+    @property
+    def recording(self) -> bool:
+        return self.recording_state == "RECORDING"
+
     def _log(self, message: str) -> None:
         stamp = datetime.now().strftime("%H:%M:%S")
         self.logs.insert(0, f"[{stamp}] {message}")
@@ -100,7 +104,7 @@ class RinApp:
     async def _clock(self) -> None:
         while True:
             await asyncio.sleep(1)
-            if self.recording and self.active_tab == "dashboard":
+            if self.recording_state == "RECORDING" and self.active_tab == "dashboard":
                 self.render()
 
     def _on_location_error(self, event) -> None:
@@ -115,7 +119,7 @@ class RinApp:
 
     def _process_position(self, position: ftg.GeolocatorPosition) -> None:
         self.last_position = position
-        if not self.recording:
+        if self.recording_state != "RECORDING":
             if self.active_tab == "debug":
                 self.render()
             return
@@ -136,13 +140,7 @@ class RinApp:
         if self.active_tab in {"dashboard", "data", "debug"}:
             self.render()
 
-    async def toggle_recording(self, _event) -> None:
-        if self.recording:
-            self.recording = False
-            self._log("Aufzeichnung beendet.")
-            self.render()
-            return
-
+    async def start_recording(self, _event=None) -> None:
         try:
             permission = await self.geolocator.request_permission()
             if permission not in {
@@ -155,11 +153,11 @@ class RinApp:
         except Exception as perm_err:
             self._log(f"Berechtigungs-Check: {perm_err}")
 
-        self.tracker.reset()
-        self.tracker.start(int(time.time() * 1000))
-        self.store.start_session(self.tracker.session_id, self.settings.mode)
-        self.recording = True
-        self._log("Aufzeichnung gestartet (2s Intervall, 5m Genauigkeit).")
+        start_time = int(time.time() * 1000)
+        session_id = self.tracker.start(start_time)
+        self.store.start_session(session_id, self.settings.mode)
+        self.recording_state = "RECORDING"
+        self._log(f"Aufzeichnung gestartet: {session_id} (2s Intervall, 5m Genauigkeit).")
         try:
             position = await self.geolocator.get_current_position()
             if position is not None:
@@ -167,6 +165,105 @@ class RinApp:
         except Exception as error:
             self._log(f"Erste GPS-Abfrage: {error}")
         self.render()
+
+    def pause_recording(self, _event=None) -> None:
+        if self.recording_state == "RECORDING":
+            self.recording_state = "PAUSED"
+            self.tracker.pause(int(time.time() * 1000))
+            self._log(f"Aufzeichnung pausiert: {self.tracker.session_id}")
+            self.render()
+
+    def resume_recording(self, _event=None) -> None:
+        if self.recording_state == "PAUSED":
+            self.recording_state = "RECORDING"
+            self.tracker.resume(int(time.time() * 1000))
+            self._log(f"Aufzeichnung fortgesetzt: {self.tracker.session_id}")
+            self.render()
+
+    def request_stop_recording(self, _event=None) -> None:
+        def on_cancel(_e):
+            self._page.pop_dialog()
+
+        def on_confirm(_e):
+            self._page.pop_dialog()
+            self.stop_recording()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Row([
+                ft.Icon(ft.Icons.HELP_OUTLINE_ROUNDED, color="#FFA726", size=24),
+                ft.Text("Aufzeichnung beenden?", size=18, weight=ft.FontWeight.BOLD),
+            ], spacing=8),
+            content=ft.Text("Möchtest du die aktuelle Fahrtaufzeichnung wirklich beenden und speichern?"),
+            actions=[
+                ft.TextButton("Abbrechen", on_click=on_cancel),
+                ft.FilledButton(
+                    content=ft.Text("Beenden & Speichern"),
+                    bgcolor=COLOR_DANGER,
+                    color="#ffffff",
+                    on_click=on_confirm,
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self._page.show_dialog(dialog)
+
+    def stop_recording(self) -> None:
+        session_id = self.tracker.session_id
+        self.recording_state = "IDLE"
+        self._log(f"Aufzeichnung beendet und gespeichert: {session_id}")
+        self.render()
+
+    async def toggle_recording(self, _event=None) -> None:
+        if self.recording_state in {"RECORDING", "PAUSED"}:
+            self.request_stop_recording()
+        else:
+            await self.start_recording()
+
+    def open_session(self, session_id: str) -> None:
+        if self.recording_state != "IDLE":
+            self._log("Kann während einer aktiven Aufzeichnung keine andere Fahrt öffnen.")
+            return
+        points = self.store.points_for(session_id)
+        if not points:
+            self._log(f"Keine Datenpunkte für {session_id} gefunden.")
+            return
+        self.tracker.load_session(session_id, points)
+        self._log(f"Fahrt {session_id} geladen ({len(points)} Datenpunkte).")
+        self.active_tab = "dashboard"
+        self.render()
+
+    def delete_session(self, session_id: str) -> None:
+        def on_cancel(_e):
+            self._page.pop_dialog()
+
+        def on_confirm(_e):
+            self._page.pop_dialog()
+            self.store.clear_session(session_id)
+            if self.tracker.session_id == session_id:
+                self.tracker.reset()
+            self._log(f"Fahrt {session_id} gelöscht.")
+            self.render()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Row([
+                ft.Icon(ft.Icons.DELETE_FOREVER_ROUNDED, color=COLOR_DANGER, size=24),
+                ft.Text("Fahrt löschen?", size=18, weight=ft.FontWeight.BOLD),
+            ], spacing=8),
+            content=ft.Text(f"Möchtest du die Aufzeichnung '{session_id}' unwiderruflich löschen?"),
+            actions=[
+                ft.TextButton("Abbrechen", on_click=on_cancel),
+                ft.FilledButton(
+                    content=ft.Text("Löschen"),
+                    bgcolor=COLOR_DANGER,
+                    color="#ffffff",
+                    on_click=on_confirm,
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self._page.show_dialog(dialog)
 
     async def fetch_location(self, _event) -> None:
         try:
@@ -191,7 +288,7 @@ class RinApp:
         if self.tracker.session_id:
             self.store.clear_session(self.tracker.session_id)
         self.tracker.reset()
-        self.recording = False
+        self.recording_state = "IDLE"
         self.csv_visible = False
         self._log("Aufzeichnung und Messdaten zurückgesetzt.")
         self.render()
@@ -200,24 +297,51 @@ class RinApp:
         self.csv_visible = not self.csv_visible
         self.render()
 
-    def download_csv(self, _event) -> None:
-        points = self.store.points_for(self.tracker.session_id)
+    def download_csv(self, _event=None, session_id: str | None = None) -> None:
+        target_id = session_id or self.tracker.session_id
+        if not target_id:
+            self._log("Keine aktive Fahrt für Export ausgewählt.")
+            return
+        points = self.store.points_for(target_id)
+        if not points:
+            self._log(f"Keine Datenpunkte für {target_id} vorhanden.")
+            return
         csv_text = self._csv_for(points)
         encoded = urllib.parse.quote(csv_text)
         data_uri = f"data:text/csv;charset=utf-8,{encoded}"
         
         try:
             os.makedirs("exports", exist_ok=True)
-            filename = f"exports/rin08_{self.tracker.session_id or 'session'}.csv"
+            filename = f"exports/rin08_{target_id}.csv"
             with open(filename, "w", encoding="utf-8") as f:
                 f.write(csv_text)
-            self._log(f"CSV exportiert nach {filename}")
+            self._log(f"CSV exportiert: {filename}")
         except Exception as err:
             self._log(f"Lokales CSV Speichern: {err}")
 
         self._page.launch_url(data_uri)
 
-    def copy_csv(self, _event) -> None:
+    def download_csv_all(self, _event=None) -> None:
+        all_pts = self.store.all_points()
+        if not all_pts:
+            self._log("Keine Datenpunkte in Datenbank vorhanden.")
+            return
+        csv_text = self._csv_for(all_pts)
+        encoded = urllib.parse.quote(csv_text)
+        data_uri = f"data:text/csv;charset=utf-8,{encoded}"
+        
+        try:
+            os.makedirs("exports", exist_ok=True)
+            filename = "exports/rin08_all_tracks.csv"
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(csv_text)
+            self._log(f"Alle Fahrten exportiert: {filename} ({len(all_pts)} Punkte)")
+        except Exception as err:
+            self._log(f"Lokales CSV Speichern: {err}")
+
+        self._page.launch_url(data_uri)
+
+    def copy_csv(self, _event=None) -> None:
         points = self.store.points_for(self.tracker.session_id)
         csv_text = self._csv_for(points)
         self._page.set_clipboard(csv_text)
@@ -308,15 +432,54 @@ class RinApp:
     def dashboard_view(self) -> ft.Column:
         metrics = self.tracker.metrics
         saq = self.tracker.current_saq()
-        letter = saq.letter if self.recording else "-"
-        grade_desc = f"Stufe {saq.grade}" if self.recording else "Stufe -"
+        has_data = (self.recording_state in {"RECORDING", "PAUSED"}) or (self.tracker.total_distance_km > 0)
+        letter = saq.letter if has_data else "-"
+        grade_desc = f"Stufe {saq.grade}" if has_data else "Stufe -"
+        if self.recording_state == "PAUSED":
+            grade_desc += " · PAUSIERT"
+        elif self.recording_state == "RECORDING":
+            grade_desc += " · LIVE"
+        elif self.tracker.session_id:
+            grade_desc += " · Gespeichert"
         saq_color = SAQ_COLORS.get(letter, "#718096")
 
-        elapsed = (
-            int(time.time() * 1000) - metrics.start_time_ms
-            if self.recording and metrics.start_time_ms
-            else 0
-        )
+        if self.recording_state in {"RECORDING", "PAUSED"}:
+            elapsed = self.tracker.effective_elapsed_ms(int(time.time() * 1000))
+        elif self.tracker.session_id:
+            elapsed = metrics.moving_time_ms or 0
+        else:
+            elapsed = 0
+
+        # Optional Track Status Banner
+        track_banner = None
+        if self.tracker.session_id:
+            if self.recording_state == "RECORDING":
+                st_color = COLOR_DANGER
+                st_label = "LIVE AUFZEICHNUNG"
+                st_icon = ft.Icons.FIBER_MANUAL_RECORD
+            elif self.recording_state == "PAUSED":
+                st_color = "#FFA726"
+                st_label = "PAUSIERT"
+                st_icon = ft.Icons.PAUSE_CIRCLE_FILLED
+            else:
+                st_color = COLOR_CYAN
+                st_label = "GELADENE FAHRT"
+                st_icon = ft.Icons.FOLDER_OPEN_ROUNDED
+
+            track_banner = ft.Container(
+                content=ft.Row(
+                    controls=[
+                        ft.Icon(st_icon, color=st_color, size=15),
+                        ft.Text(f"{st_label}: {self.tracker.session_id}", size=11, weight=ft.FontWeight.BOLD, color=st_color),
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=6,
+                ),
+                bgcolor="rgba(255, 255, 255, 0.04)",
+                border_radius=8,
+                padding=ft.Padding.symmetric(vertical=6, horizontal=12),
+                border=ft.Border.all(1, f"{st_color}33"),
+            )
 
         # 1. Hero Card: ANGEBOTSQUALITÄT (SAQ)
         saq_hero_card = ft.Container(
@@ -389,17 +552,22 @@ class RinApp:
             spacing=10,
         )
 
+        dash_controls = []
+        if track_banner:
+            dash_controls.append(track_banner)
+        dash_controls.extend([
+            saq_hero_card,
+            chart_container,
+            row_dist,
+            row_speed,
+            row_time,
+            ft.Container(height=8),
+        ])
+
         return ft.Column(
             scroll=ft.ScrollMode.AUTO,
             spacing=12,
-            controls=[
-                saq_hero_card,
-                chart_container,
-                row_dist,
-                row_speed,
-                row_time,
-                ft.Container(height=8),
-            ],
+            controls=dash_controls,
         )
 
     def _chart(self) -> ftc.LineChart:
@@ -555,27 +723,35 @@ class RinApp:
         )
 
     def data_view(self) -> ft.Column:
+        sessions = self.store.list_sessions()
         points = self.store.points_for(self.tracker.session_id)
         
         # Summary & Export Action Bar
         action_row = ft.Row(
             controls=[
                 ft.Button(
-                    content=ft.Row([ft.Icon(ft.Icons.DOWNLOAD, size=16), ft.Text("CSV Export")]),
+                    content=ft.Row([ft.Icon(ft.Icons.DOWNLOAD, size=15), ft.Text("CSV (Diese Fahrt)", size=12)]),
                     bgcolor=COLOR_CYAN,
                     color="#0d0d1a",
-                    on_click=self.download_csv,
+                    on_click=lambda _: self.download_csv(),
                     expand=True,
                 ),
                 ft.Button(
-                    content=ft.Row([ft.Icon(ft.Icons.CONTENT_COPY, size=16), ft.Text("Kopieren")]),
+                    content=ft.Row([ft.Icon(ft.Icons.ALL_INBOX_ROUNDED, size=15), ft.Text("CSV (Alle Fahrten)", size=12)]),
+                    bgcolor="rgba(79, 195, 247, 0.2)",
+                    color=COLOR_CYAN,
+                    on_click=lambda _: self.download_csv_all(),
+                    expand=True,
+                ),
+                ft.Button(
+                    content=ft.Row([ft.Icon(ft.Icons.CONTENT_COPY, size=15), ft.Text("Kopieren", size=12)]),
                     bgcolor="rgba(255,255,255,0.1)",
                     color=COLOR_TEXT_PRIMARY,
                     on_click=self.copy_csv,
                     expand=True,
                 ),
                 ft.Button(
-                    content=ft.Row([ft.Icon(ft.Icons.VISIBILITY, size=16), ft.Text("Vorschau")]),
+                    content=ft.Row([ft.Icon(ft.Icons.VISIBILITY, size=15), ft.Text("Vorschau", size=12)]),
                     bgcolor="rgba(255,255,255,0.1)",
                     color=COLOR_TEXT_PRIMARY,
                     on_click=self.toggle_csv,
@@ -585,11 +761,116 @@ class RinApp:
             spacing=8,
         )
 
+        # Track History Section
+        history_cards = []
+        if not sessions:
+            history_cards.append(
+                ft.Container(
+                    content=ft.Text("Noch keine Fahrten gespeichert.", size=12, color=COLOR_TEXT_MUTED),
+                    alignment=ft.Alignment.CENTER,
+                    padding=10,
+                )
+            )
+        else:
+            for s in sessions:
+                is_active = (self.tracker.session_id == s["id"])
+                stamp_str = datetime.fromtimestamp(s["started_ms"] / 1000).strftime("%d.%m.%Y %H:%M")
+                history_cards.append(
+                    ft.Container(
+                        content=ft.Row(
+                            controls=[
+                                ft.Column(
+                                    controls=[
+                                        ft.Row(
+                                            controls=[
+                                                ft.Text(stamp_str, size=12, weight=ft.FontWeight.BOLD, color=COLOR_TEXT_PRIMARY),
+                                                ft.Container(
+                                                    content=ft.Text("AKTIV", size=9, weight=ft.FontWeight.BOLD, color="#0d0d1a"),
+                                                    bgcolor=COLOR_CYAN,
+                                                    border_radius=4,
+                                                    padding=ft.Padding.symmetric(horizontal=6, vertical=1),
+                                                ) if is_active else ft.Container(),
+                                            ],
+                                            spacing=8,
+                                        ),
+                                        ft.Text(f"ID: {s['id']}", size=10, color=COLOR_TEXT_MUTED),
+                                        ft.Row(
+                                            controls=[
+                                                ft.Text(f"{s['total_distance_km']:.2f} km", size=11, weight=ft.FontWeight.W_600, color=COLOR_CYAN),
+                                                ft.Text("·", size=11, color=COLOR_TEXT_MUTED),
+                                                ft.Text(f"Luft: {s['straight_distance_km']:.2f} km", size=11, color=COLOR_TEXT_PRIMARY),
+                                                ft.Text("·", size=11, color=COLOR_TEXT_MUTED),
+                                                ft.Text(f"{s['point_count']} Pkt", size=11, color=COLOR_TEXT_MUTED),
+                                                ft.Text("·", size=11, color=COLOR_TEXT_MUTED),
+                                                ft.Text(format_duration(s["duration_ms"]), size=11, color=COLOR_TEXT_MUTED),
+                                            ],
+                                            spacing=6,
+                                        ),
+                                    ],
+                                    spacing=2,
+                                    expand=True,
+                                ),
+                                ft.Row(
+                                    controls=[
+                                        ft.IconButton(
+                                            icon=ft.Icons.FOLDER_OPEN_ROUNDED,
+                                            icon_size=20,
+                                            icon_color=COLOR_CYAN,
+                                            tooltip="Diese Fahrt im Dashboard öffnen",
+                                            on_click=lambda _, sid=s["id"]: self.open_session(sid),
+                                        ),
+                                        ft.IconButton(
+                                            icon=ft.Icons.DOWNLOAD_ROUNDED,
+                                            icon_size=20,
+                                            icon_color="rgba(255,255,255,0.7)",
+                                            tooltip="CSV dieser Fahrt herunterladen",
+                                            on_click=lambda _, sid=s["id"]: self.download_csv(session_id=sid),
+                                        ),
+                                        ft.IconButton(
+                                            icon=ft.Icons.DELETE_OUTLINE_ROUNDED,
+                                            icon_size=20,
+                                            icon_color=COLOR_DANGER,
+                                            tooltip="Fahrt löschen",
+                                            on_click=lambda _, sid=s["id"]: self.delete_session(sid),
+                                        ),
+                                    ],
+                                    spacing=2,
+                                ),
+                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        bgcolor="rgba(79, 195, 247, 0.08)" if is_active else "rgba(255, 255, 255, 0.03)",
+                        border_radius=8,
+                        padding=ft.Padding.symmetric(horizontal=10, vertical=8),
+                        border=ft.Border.all(1, COLOR_CYAN if is_active else "rgba(255, 255, 255, 0.05)"),
+                    )
+                )
+
+        history_group = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.HISTORY_ROUNDED, size=16, color=COLOR_CYAN),
+                            ft.Text(f"Fahrten-Historie ({len(sessions)})", size=13, weight=ft.FontWeight.BOLD, color=COLOR_CYAN),
+                        ],
+                        spacing=6,
+                    ),
+                    ft.Column(controls=history_cards, spacing=6),
+                ],
+                spacing=8,
+            ),
+            bgcolor=COLOR_CARD,
+            border_radius=12,
+            padding=12,
+        )
+
         rows = []
         if not points:
             rows.append(
                 ft.Container(
-                    content=ft.Text("Noch keine Datenpunkte aufgezeichnet.", color="rgba(255,255,255,0.4)"),
+                    content=ft.Text("Keine Datenpunkte für die ausgewählte Fahrt vorhanden.", color="rgba(255,255,255,0.4)"),
                     alignment=ft.Alignment.CENTER,
                     padding=20,
                 )
@@ -638,14 +919,25 @@ class RinApp:
                 )
 
         table_box = ft.Container(
-            content=ft.Column(controls=rows, scroll=ft.ScrollMode.AUTO, spacing=2),
+            content=ft.Column(
+                controls=[
+                    ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.LIST_ALT_ROUNDED, size=16, color=COLOR_CYAN),
+                            ft.Text(f"Datenpunkte ({self.tracker.session_id or 'Keine Fahrt'}: {len(points)} Pkt)", size=13, weight=ft.FontWeight.BOLD, color=COLOR_CYAN),
+                        ],
+                        spacing=6,
+                    ),
+                    ft.Column(controls=rows, scroll=ft.ScrollMode.AUTO, spacing=2),
+                ],
+                spacing=8,
+            ),
             bgcolor=COLOR_CARD,
             border_radius=12,
-            padding=8,
-            expand=True,
+            padding=10,
         )
 
-        controls = [action_row]
+        controls = [action_row, history_group]
 
         if self.csv_visible:
             controls.append(
@@ -664,7 +956,7 @@ class RinApp:
         controls.append(table_box)
         controls.append(
             ft.Button(
-                content=ft.Text("Aufzeichnung zurücksetzen"),
+                content=ft.Text("Aktive Messdaten leeren"),
                 bgcolor="rgba(255, 107, 107, 0.15)",
                 color=COLOR_DANGER,
                 on_click=self.reset_session,
@@ -963,25 +1255,115 @@ class RinApp:
             border=ft.Border(bottom=ft.BorderSide(1, "rgba(255,255,255,0.06)")),
         )
 
-        action_button = ft.Button(
-            content=ft.Text(
-                "AUFZEICHNUNG BEENDEN" if self.recording else "AUFZEICHNUNG STARTEN",
-                size=16,
-                weight=ft.FontWeight.W_800,
-                color="#ffffff" if self.recording else "#0d0d1a",
-            ),
-            bgcolor=COLOR_DANGER if self.recording else COLOR_CYAN,
-            style=ft.ButtonStyle(
-                shape=ft.RoundedRectangleBorder(radius=50),
-                padding=ft.Padding.symmetric(vertical=16),
-            ),
-            on_click=self.toggle_recording,
-            width=360,
-        )
+        if self.recording_state == "IDLE":
+            action_content = ft.Column(
+                controls=[
+                    ft.IconButton(
+                        icon=ft.Icons.PLAY_ARROW_ROUNDED,
+                        icon_size=36,
+                        icon_color="#0d0d1a",
+                        bgcolor=COLOR_CYAN,
+                        width=64,
+                        height=64,
+                        style=ft.ButtonStyle(shape=ft.CircleBorder()),
+                        on_click=self.start_recording,
+                        tooltip="Aufzeichnung starten",
+                    ),
+                    ft.Text("START", size=11, weight=ft.FontWeight.BOLD, color=COLOR_CYAN),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=4,
+            )
+        elif self.recording_state == "RECORDING":
+            action_content = ft.Row(
+                controls=[
+                    ft.Column(
+                        controls=[
+                            ft.IconButton(
+                                icon=ft.Icons.PAUSE_ROUNDED,
+                                icon_size=30,
+                                icon_color="#0d0d1a",
+                                bgcolor="#FFA726",
+                                width=56,
+                                height=56,
+                                style=ft.ButtonStyle(shape=ft.CircleBorder()),
+                                on_click=self.pause_recording,
+                                tooltip="Pausieren",
+                            ),
+                            ft.Text("PAUSE", size=10, weight=ft.FontWeight.BOLD, color="#FFA726"),
+                        ],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=4,
+                    ),
+                    ft.Column(
+                        controls=[
+                            ft.IconButton(
+                                icon=ft.Icons.STOP_ROUNDED,
+                                icon_size=30,
+                                icon_color="#ffffff",
+                                bgcolor=COLOR_DANGER,
+                                width=56,
+                                height=56,
+                                style=ft.ButtonStyle(shape=ft.CircleBorder()),
+                                on_click=self.request_stop_recording,
+                                tooltip="Aufzeichnung beenden",
+                            ),
+                            ft.Text("STOPP", size=10, weight=ft.FontWeight.BOLD, color=COLOR_DANGER),
+                        ],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=4,
+                    ),
+                ],
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=36,
+            )
+        else:  # PAUSED
+            action_content = ft.Row(
+                controls=[
+                    ft.Column(
+                        controls=[
+                            ft.IconButton(
+                                icon=ft.Icons.PLAY_ARROW_ROUNDED,
+                                icon_size=30,
+                                icon_color="#0d0d1a",
+                                bgcolor="#69F0AE",
+                                width=56,
+                                height=56,
+                                style=ft.ButtonStyle(shape=ft.CircleBorder()),
+                                on_click=self.resume_recording,
+                                tooltip="Fortsetzen",
+                            ),
+                            ft.Text("WEITER", size=10, weight=ft.FontWeight.BOLD, color="#69F0AE"),
+                        ],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=4,
+                    ),
+                    ft.Column(
+                        controls=[
+                            ft.IconButton(
+                                icon=ft.Icons.STOP_ROUNDED,
+                                icon_size=30,
+                                icon_color="#ffffff",
+                                bgcolor=COLOR_DANGER,
+                                width=56,
+                                height=56,
+                                style=ft.ButtonStyle(shape=ft.CircleBorder()),
+                                on_click=self.request_stop_recording,
+                                tooltip="Aufzeichnung beenden",
+                            ),
+                            ft.Text("STOPP", size=10, weight=ft.FontWeight.BOLD, color=COLOR_DANGER),
+                        ],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=4,
+                    ),
+                ],
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=36,
+            )
 
         bottom_bar = ft.Container(
-            content=action_button,
-            padding=ft.Padding.symmetric(horizontal=14, vertical=12),
+            content=action_content,
+            padding=ft.Padding.symmetric(horizontal=14, vertical=10),
             alignment=ft.Alignment.CENTER,
             bgcolor=COLOR_BG,
             border=ft.Border(top=ft.BorderSide(1, "rgba(255,255,255,0.06)")),

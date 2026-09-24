@@ -16,6 +16,10 @@ dependencies = [
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+packages = ["views"]
+py-modules = ["main", "models"]
+
 [project.optional-dependencies]
 dev = [
     "flet-cli>=1.0.1",

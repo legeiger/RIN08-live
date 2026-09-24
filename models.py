@@ -136,6 +136,9 @@ class TripTracker:
     def reset(self) -> None:
         self.session_id: str | None = None
         self.started_ms = 0
+        self.paused_ms = 0
+        self.pause_start_ms = 0
+        self.is_paused = False
         self.start_latitude: float | None = None
         self.start_longitude: float | None = None
         self.last_latitude: float | None = None
@@ -148,11 +151,55 @@ class TripTracker:
         self.moving_time_ms = 0
         self.window: list[tuple[float, float, int]] = []
 
-    def start(self, start_ms: int) -> str:
+    def start(self, start_ms: int, session_id: str | None = None) -> str:
         self.reset()
-        self.session_id = f"rin08-{start_ms}"
+        if not session_id:
+            stamp = datetime.fromtimestamp(start_ms / 1000).strftime("%Y%m%d_%H%M%S")
+            session_id = f"rin08-{stamp}"
+        self.session_id = session_id
         self.started_ms = start_ms
         return self.session_id
+
+    def pause(self, current_ms: int) -> None:
+        self.is_paused = True
+        self.pause_start_ms = current_ms
+
+    def resume(self, current_ms: int) -> None:
+        if self.pause_start_ms > 0:
+            self.paused_ms += max(0, current_ms - self.pause_start_ms)
+            self.pause_start_ms = 0
+        self.is_paused = False
+        self.last_timestamp_ms = current_ms
+
+    def effective_elapsed_ms(self, current_ms: int) -> int:
+        if not self.started_ms:
+            return 0
+        total = current_ms - self.started_ms
+        paused = self.paused_ms
+        if self.is_paused and self.pause_start_ms:
+            paused += (current_ms - self.pause_start_ms)
+        return max(0, total - paused)
+
+    def load_session(self, session_id: str, points: list[LocationPoint]) -> None:
+        self.reset()
+        self.session_id = session_id
+        if not points:
+            return
+        first = points[0]
+        last = points[-1]
+        self.started_ms = first.timestamp_ms
+        self.start_latitude = first.latitude
+        self.start_longitude = first.longitude
+        self.last_latitude = last.latitude
+        self.last_longitude = last.longitude
+        self.last_timestamp_ms = last.timestamp_ms
+        self.total_distance_km = last.total_distance_km
+        self.straight_distance_km = last.straight_distance_km
+        self.current_speed_kmh = last.instant_speed_kmh
+        self.straight_speed_kmh = last.straight_speed_kmh
+        cutoff = self.settings.moving_cutoff
+        moving_count = sum(1 for p in points if p.instant_speed_kmh >= cutoff)
+        self.moving_time_ms = int(moving_count * self.settings.gps_interval * 1000)
 
     @property
     def metrics(self) -> TripMetrics:
@@ -178,6 +225,9 @@ class TripTracker:
         timestamp: int | None = None,
         timestamp_ms: int | None = None,
     ) -> tuple[LocationPoint | None, str]:
+        if self.is_paused:
+            return None, "Aufzeichnung pausiert (Punkt ignoriert)"
+
         actual_acc = accuracy_m if accuracy_m is not None else (accuracy or 0.0)
         actual_ts = timestamp_ms if timestamp_ms is not None else (timestamp or int(datetime.now().timestamp() * 1000))
 
@@ -197,7 +247,8 @@ class TripTracker:
         if instant_speed > self.settings.max_current_speed:
             return None, f"GPS-Spike verworfen: {instant_speed:.1f} km/h"
         straight_distance = haversine_km(self.start_latitude, self.start_longitude, latitude, longitude)
-        total_hours = (actual_ts - self.started_ms) / 3_600_000
+        effective_ms = self.effective_elapsed_ms(actual_ts)
+        total_hours = effective_ms / 3_600_000
         straight_speed = straight_distance / total_hours if total_hours > 0 else 0.0
         if straight_speed > self.settings.max_straight_speed:
             return None, f"V-Luft-Peak verworfen: {straight_speed:.1f} km/h"
@@ -273,6 +324,40 @@ class SQLiteStore:
         with self._connect() as connection:
             rows = connection.execute("SELECT session_id, timestamp_ms, latitude, longitude, accuracy_m, instant_speed_kmh, straight_speed_kmh, straight_distance_km, total_distance_km, saq FROM location_points WHERE session_id = ? ORDER BY timestamp_ms", (session_id,)).fetchall()
         return [LocationPoint(*row) for row in rows]
+
+    def all_points(self) -> list[LocationPoint]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT session_id, timestamp_ms, latitude, longitude, accuracy_m, instant_speed_kmh, straight_speed_kmh, straight_distance_km, total_distance_km, saq FROM location_points ORDER BY timestamp_ms ASC").fetchall()
+        return [LocationPoint(*row) for row in rows]
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute("""
+                SELECT s.id, s.started_ms, s.mode,
+                       COUNT(p.timestamp_ms) as point_count,
+                       COALESCE(MAX(p.total_distance_km), 0.0) as total_dist,
+                       COALESCE(MAX(p.straight_distance_km), 0.0) as straight_dist,
+                       COALESCE(MAX(p.straight_speed_kmh), 0.0) as max_v_luft,
+                       COALESCE(MIN(p.timestamp_ms), s.started_ms) as first_ts,
+                       COALESCE(MAX(p.timestamp_ms), s.started_ms) as last_ts
+                FROM sessions s
+                LEFT JOIN location_points p ON s.id = p.session_id
+                GROUP BY s.id
+                ORDER BY s.started_ms DESC
+            """).fetchall()
+        results = []
+        for row in rows:
+            results.append({
+                "id": row[0],
+                "started_ms": row[1],
+                "mode": row[2] or "PKW",
+                "point_count": row[3],
+                "total_distance_km": row[4],
+                "straight_distance_km": row[5],
+                "max_v_luft_kmh": row[6],
+                "duration_ms": max(0, row[8] - row[7]),
+            })
+        return results
 
     def clear_session(self, session_id: str | None) -> None:
         if not session_id:
