@@ -46,7 +46,7 @@ jobs:
 
       - name: Build APK
         run: |
-          flet build apk --project-name RIN08-Live
+          flet build apk --project rin08_live --product "RIN08-Live" --permissions location --yes
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4

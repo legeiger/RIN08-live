@@ -72,7 +72,10 @@ class RinApp:
             on_position_change=self._on_position_change,
             on_error=self._on_location_error,
         )
-        self._page.services.append(self.geolocator)
+        self.file_picker = ft.FilePicker()
+        self.share_service = ft.Share()
+        self.clipboard = ft.Clipboard()
+        self._page.services.extend([self.geolocator, self.file_picker, self.share_service, self.clipboard])
 
         # Root layout
         self.root = ft.Column(
@@ -297,7 +300,7 @@ class RinApp:
         self.csv_visible = not self.csv_visible
         self.render()
 
-    def download_csv(self, _event=None, session_id: str | None = None) -> None:
+    async def download_csv(self, _event=None, session_id: str | None = None) -> None:
         target_id = session_id or self.tracker.session_id
         if not target_id:
             self._log("Keine aktive Fahrt für Export ausgewählt.")
@@ -306,52 +309,139 @@ class RinApp:
         if not points:
             self._log(f"Keine Datenpunkte für {target_id} vorhanden.")
             return
+
         csv_text = self._csv_for(points)
-        encoded = urllib.parse.quote(csv_text)
-        data_uri = f"data:text/csv;charset=utf-8,{encoded}"
-        
+        filename = f"rin08_{target_id}.csv"
+        csv_bytes = csv_text.encode("utf-8")
+
+        # 1. Local copy in exports/ directory
         try:
             os.makedirs("exports", exist_ok=True)
-            filename = f"exports/rin08_{target_id}.csv"
-            with open(filename, "w", encoding="utf-8") as f:
+            local_path = os.path.join("exports", filename)
+            with open(local_path, "w", encoding="utf-8") as f:
                 f.write(csv_text)
-            self._log(f"CSV exportiert: {filename}")
+            self._log(f"Lokale Kopie: {filename}")
         except Exception as err:
             self._log(f"Lokales CSV Speichern: {err}")
 
-        self._page.launch_url(data_uri)
+        # 2. Native File Picker (Opens Android Storage Access Framework file chooser / Desktop Save dialog)
+        picker_saved = False
+        try:
+            saved_path = await self.file_picker.save_file(
+                dialog_title="CSV-Datei speichern",
+                file_name=filename,
+                src_bytes=csv_bytes,
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["csv"],
+            )
+            if saved_path:
+                self._log(f"Datei erfolgreich exportiert: {saved_path}")
+                picker_saved = True
+            else:
+                self._log("Dateiauswahl abgebrochen.")
+                return
+        except Exception as err:
+            self._log(f"Dateiauswahl: {err}")
 
-    def download_csv_all(self, _event=None) -> None:
+        # 3. Fallback: Browser download (Data URI) if on web and file picker not used
+        if not picker_saved and getattr(self._page, "web", False):
+            try:
+                encoded = urllib.parse.quote(csv_text)
+                data_uri = f"data:text/csv;charset=utf-8,{encoded}"
+                self._page.launch_url(data_uri)
+                self._log(f"Browser-Download angestoßen ({len(points)} Pkt)")
+            except Exception as err:
+                self._log(f"Download-Fehler: {err}")
+
+    async def download_csv_all(self, _event=None) -> None:
         all_pts = self.store.all_points()
         if not all_pts:
             self._log("Keine Datenpunkte in Datenbank vorhanden.")
             return
-        csv_text = self._csv_for(all_pts)
-        encoded = urllib.parse.quote(csv_text)
-        data_uri = f"data:text/csv;charset=utf-8,{encoded}"
-        
+
+        csv_text = self._csv_for_all(all_pts)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"rin08_all_tracks_{stamp}.csv"
+        csv_bytes = csv_text.encode("utf-8")
+
+        # 1. Local copy in exports/ directory
         try:
             os.makedirs("exports", exist_ok=True)
-            filename = "exports/rin08_all_tracks.csv"
-            with open(filename, "w", encoding="utf-8") as f:
+            local_path = os.path.join("exports", filename)
+            with open(local_path, "w", encoding="utf-8") as f:
                 f.write(csv_text)
-            self._log(f"Alle Fahrten exportiert: {filename} ({len(all_pts)} Punkte)")
+            self._log(f"Lokale Kopie: {filename}")
         except Exception as err:
             self._log(f"Lokales CSV Speichern: {err}")
 
-        self._page.launch_url(data_uri)
+        # 2. Native File Picker
+        picker_saved = False
+        try:
+            saved_path = await self.file_picker.save_file(
+                dialog_title="Alle Fahrten als CSV speichern",
+                file_name=filename,
+                src_bytes=csv_bytes,
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["csv"],
+            )
+            if saved_path:
+                self._log(f"Gesamtexport gespeichert: {saved_path}")
+                picker_saved = True
+            else:
+                self._log("Dateiauswahl abgebrochen.")
+                return
+        except Exception as err:
+            self._log(f"Dateiauswahl: {err}")
+
+        # 3. Fallback: Browser download (Data URI)
+        if not picker_saved and getattr(self._page, "web", False):
+            try:
+                encoded = urllib.parse.quote(csv_text)
+                data_uri = f"data:text/csv;charset=utf-8,{encoded}"
+                self._page.launch_url(data_uri)
+                self._log(f"Browser-Download angestoßen ({len(all_pts)} Pkt)")
+            except Exception as err:
+                self._log(f"Download-Fehler: {err}")
+
+    async def share_csv(self, _event=None, session_id: str | None = None) -> None:
+        target_id = session_id or self.tracker.session_id
+        if target_id:
+            points = self.store.points_for(target_id)
+            filename = f"rin08_{target_id}.csv"
+            csv_text = self._csv_for(points)
+        else:
+            points = self.store.all_points()
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"rin08_all_tracks_{stamp}.csv"
+            csv_text = self._csv_for_all(points)
+
+        if not points:
+            self._log("Keine Datenpunkte zum Teilen vorhanden.")
+            return
+
+        csv_bytes = csv_text.encode("utf-8")
+        try:
+            share_file = ft.ShareFile.from_bytes(csv_bytes, mime_type="text/csv", name=filename)
+            await self.share_service.share_files(
+                [share_file],
+                title="RIN08 CSV teilen",
+                text=f"RIN08 Datenexport ({filename})",
+            )
+            self._log(f"Teilen-Menü geöffnet für {filename}")
+        except Exception as err:
+            self._log(f"Teilen fehlgeschlagen: {err}")
 
     async def copy_csv(self, _event=None) -> None:
         points = self.store.points_for(self.tracker.session_id)
+        if not points:
+            self._log("Keine Datenpunkte zum Kopieren vorhanden.")
+            return
         csv_text = self._csv_for(points)
         try:
-            if not any(isinstance(s, ft.Clipboard) for s in self._page.services):
-                self._page.services.append(ft.Clipboard())
-            clipboard = next(s for s in self._page.services if isinstance(s, ft.Clipboard))
-            await clipboard.set(csv_text)
+            await self.clipboard.set(csv_text)
             self._log("CSV in Zwischenablage kopiert.")
         except Exception as err:
-            self._log(f"Kopieren: {err}")
+            self._log(f"Kopieren fehlgeschlagen: {err}")
 
     def save_settings(self, _event) -> None:
         self.store.save_settings(self.settings)
@@ -736,17 +826,24 @@ class RinApp:
         action_row = ft.Row(
             controls=[
                 ft.Button(
-                    content=ft.Row([ft.Icon(ft.Icons.DOWNLOAD, size=15), ft.Text("CSV (Diese Fahrt)", size=12)]),
+                    content=ft.Row([ft.Icon(ft.Icons.DOWNLOAD, size=15), ft.Text("CSV Export", size=12)]),
                     bgcolor=COLOR_CYAN,
                     color="#0d0d1a",
-                    on_click=lambda _: self.download_csv(),
+                    on_click=self.download_csv,
                     expand=True,
                 ),
                 ft.Button(
-                    content=ft.Row([ft.Icon(ft.Icons.ALL_INBOX_ROUNDED, size=15), ft.Text("CSV (Alle Fahrten)", size=12)]),
+                    content=ft.Row([ft.Icon(ft.Icons.ALL_INBOX_ROUNDED, size=15), ft.Text("CSV Alle", size=12)]),
                     bgcolor="rgba(79, 195, 247, 0.2)",
                     color=COLOR_CYAN,
-                    on_click=lambda _: self.download_csv_all(),
+                    on_click=self.download_csv_all,
+                    expand=True,
+                ),
+                ft.Button(
+                    content=ft.Row([ft.Icon(ft.Icons.SHARE_ROUNDED, size=15), ft.Text("Teilen", size=12)]),
+                    bgcolor="rgba(255,255,255,0.1)",
+                    color=COLOR_TEXT_PRIMARY,
+                    on_click=self.share_csv,
                     expand=True,
                 ),
                 ft.Button(
@@ -764,7 +861,7 @@ class RinApp:
                     expand=True,
                 ),
             ],
-            spacing=8,
+            spacing=6,
         )
 
         # Track History Section
@@ -829,8 +926,15 @@ class RinApp:
                                             icon=ft.Icons.DOWNLOAD_ROUNDED,
                                             icon_size=20,
                                             icon_color="rgba(255,255,255,0.7)",
-                                            tooltip="CSV dieser Fahrt herunterladen",
-                                            on_click=lambda _, sid=s["id"]: self.download_csv(session_id=sid),
+                                            tooltip="CSV dieser Fahrt im Datei-Manager speichern",
+                                            on_click=lambda _, sid=s["id"]: self._page.run_task(self.download_csv, session_id=sid),
+                                        ),
+                                        ft.IconButton(
+                                            icon=ft.Icons.SHARE_ROUNDED,
+                                            icon_size=20,
+                                            icon_color="rgba(255,255,255,0.7)",
+                                            tooltip="CSV dieser Fahrt teilen",
+                                            on_click=lambda _, sid=s["id"]: self._page.run_task(self.share_csv, session_id=sid),
                                         ),
                                         ft.IconButton(
                                             icon=ft.Icons.DELETE_OUTLINE_ROUNDED,
