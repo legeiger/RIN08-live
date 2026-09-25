@@ -1,12 +1,25 @@
 name: Build Android APK
 
 on:
+  push:
+    branches:
+      - main
+      - flet
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       branch:
         description: 'Branch to build'
         required: true
-        default: 'flet'
+        default: 'main'
+      create_release:
+        description: 'Create GitHub Release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
 
 jobs:
   build-apk:
@@ -16,10 +29,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.branch || 'flet' }}
+          ref: ${{ github.event.inputs.branch || github.ref }}
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -43,10 +56,23 @@ jobs:
 
       - name: Build APK
         run: |
-          flet build apk --project-name RIN08-Live
+          flet build apk --project rin08_live --product "RIN08-Live" --permissions location --yes
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: RIN08-Live-release-apk
           path: build/apk/*.apk
+          if-no-files-found: warn
+
+      - name: Publish to GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == true)
+        uses: softprops/action-gh-release@v3
+        with:
+          files: build/apk/*.apk
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-flet' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'RIN08-Live (Latest Flet Build)' }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
