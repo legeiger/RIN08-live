@@ -75,7 +75,7 @@ A dedicated GitHub Actions workflow ([`.github/workflows/build-apk.yml`](.github
 If building locally on a machine with Flutter SDK, Android SDK (API 34+), and JDK 17 installed:
 
 ```bash
-flet build apk --project-name RIN08-Live
+flet build apk --project rin08_live --product "RIN08-Live" --permissions location
 ```
 
 Output binary:
