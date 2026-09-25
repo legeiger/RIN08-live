@@ -143,7 +143,84 @@ class RinApp:
         if self.active_tab in {"dashboard", "data", "debug"}:
             self.render()
 
-    async def start_recording(self, _event=None) -> None:
+    def request_start_recording(self, _event=None) -> None:
+        def on_cancel(_e):
+            self._page.pop_dialog()
+            self._log("Aufzeichnung abgebrochen (keine Standort-Zustimmung).")
+
+        async def on_consent(_e):
+            self._page.pop_dialog()
+            await self._execute_start_recording()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Row([
+                ft.Icon(ft.Icons.LOCATION_ON_ROUNDED, color=COLOR_CYAN, size=24),
+                ft.Text("Standortfreigabe & Akku", size=18, weight=ft.FontWeight.BOLD),
+            ], spacing=8),
+            content=ft.Container(
+                content=ft.Column(
+                    controls=[
+                        ft.Text(
+                            "RIN08-Live benötigt kontinuierlichen Zugriff auf deine GPS-Standortdaten, um Fahrten und SAQ-Qualitätsstufen auch bei gesperrtem Bildschirm oder im Hintergrund lückenlos aufzuzeichnen.",
+                            size=13,
+                            color=COLOR_TEXT_PRIMARY,
+                        ),
+                        ft.Container(height=4),
+                        ft.Container(
+                            content=ft.Column(
+                                controls=[
+                                    ft.Row(
+                                        controls=[
+                                            ft.Icon(ft.Icons.BATTERY_ALERT_ROUNDED, color="#FFA726", size=18),
+                                            ft.Text("Wichtig für Android-Nutzer:", size=12, weight=ft.FontWeight.BOLD, color="#FFA726"),
+                                        ],
+                                        spacing=6,
+                                    ),
+                                    ft.Text(
+                                        "1. Energiesparmodus deaktivieren:\n"
+                                        "Bitte nimm RIN08-Live in den Android-Einstellungen von der Akku-Optimierung aus (auf 'Nicht eingeschränkt' setzen), damit Android die GPS-Aufzeichnung im Hintergrund nicht beendet.\n\n"
+                                        "2. Berechtigung:\n"
+                                        "Wähle bei der Systemabfrage 'Immer zulassen' (Allow all the time).",
+                                        size=11,
+                                        color="rgba(255, 255, 255, 0.9)",
+                                    ),
+                                ],
+                                spacing=4,
+                            ),
+                            bgcolor="rgba(255, 167, 38, 0.12)",
+                            border=ft.Border.all(1, "rgba(255, 167, 38, 0.3)"),
+                            border_radius=8,
+                            padding=10,
+                        ),
+                        ft.Container(height=4),
+                        ft.Text(
+                            "Deine Positionsdaten verbleiben ausschließlich lokal in der SQLite-Datenbank deines Geräts.",
+                            size=11,
+                            color=COLOR_TEXT_MUTED,
+                        ),
+                    ],
+                    spacing=4,
+                    tight=True,
+                ),
+                width=360,
+            ),
+            actions=[
+                ft.TextButton("Abbrechen", on_click=on_cancel),
+                ft.FilledButton(
+                    content=ft.Text("Zustimmen & Starten"),
+                    bgcolor=COLOR_CYAN,
+                    color="#0d0d1a",
+                    on_click=lambda e: self._page.run_task(on_consent, e),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self._page.show_dialog(dialog)
+
+    start_recording = request_start_recording
+
+    async def _execute_start_recording(self) -> None:
         try:
             permission = await self.geolocator.request_permission()
             if permission not in {
@@ -217,11 +294,11 @@ class RinApp:
         self._log(f"Aufzeichnung beendet und gespeichert: {session_id}")
         self.render()
 
-    async def toggle_recording(self, _event=None) -> None:
+    def toggle_recording(self, _event=None) -> None:
         if self.recording_state in {"RECORDING", "PAUSED"}:
             self.request_stop_recording()
         else:
-            await self.start_recording()
+            self.request_start_recording()
 
     def open_session(self, session_id: str) -> None:
         if self.recording_state != "IDLE":

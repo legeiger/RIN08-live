@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   build-apk:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Repository
@@ -71,12 +71,12 @@ jobs:
           if-no-files-found: warn
 
       - name: Publish to GitHub Releases
-        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == true)
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.create_release == 'true' || github.event.inputs.create_release == true))
         uses: softprops/action-gh-release@v3
         with:
           files: dist/RIN08-Live.apk
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'RIN08-Live (Latest Build)' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'RIN08-Live (Release Build)' }}
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
           generate_release_notes: true
         env:
